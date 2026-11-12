@@ -128,8 +128,8 @@ because:
 
 1. Any two SLIs burning at *fast* rate within the 2-hour window
    automatically escalates to an IC call. Any two across
-   *dimensions* (latency + quality, quality + cost, availability
-   + cost) *always* escalates to IC, even at medium rate.
+   *dimensions* (latency + quality, quality + cost, availability +
+   cost) *always* escalates to IC, even at medium rate.
 2. The IC runs the single-SLI runbooks in parallel using the
    secondary on-call for the second SLI; the IC personally runs
    the correlated-burn runbook (`runbooks/correlated-burn.md`)

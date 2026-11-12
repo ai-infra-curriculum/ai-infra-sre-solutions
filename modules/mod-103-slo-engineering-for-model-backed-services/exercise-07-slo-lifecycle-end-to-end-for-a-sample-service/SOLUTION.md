@@ -14,8 +14,8 @@ LLM gateway with three surfaces (`chat-stream`, `code-assist`,
 `batch-summarize`) established in exercise 01 — across the six
 lifecycle phases:
 
-1. **Define** — pick SLIs per workload class (exercise 01 + 02 + 03
-   + 04 artifacts).
+1. **Define** — pick SLIs per workload class (exercise 01 + 02 + 03 +
+   04 artifacts).
 2. **Baseline** — measure production traffic before setting
    targets.
 3. **Instrument** — wire OTel attributes, Prometheus recording

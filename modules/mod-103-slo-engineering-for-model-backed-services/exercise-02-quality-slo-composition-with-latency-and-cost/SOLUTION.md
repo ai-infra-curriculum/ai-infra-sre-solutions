@@ -228,8 +228,8 @@ must say so explicitly.
    cost ×4 named) and ends with a sum-of-shortfalls row.
 4. Confirm two reconciliation scenarios in §2.4 show ordering
    without resolving in full.
-5. Confirm the §2.5 arithmetic adds up: latency 43% + quality 7.6%
-   + availability 1.6% = 52.2% → composite ceiling 47.8%.
+5. Confirm the §2.5 arithmetic adds up: latency 43% + quality 7.6% +
+   availability 1.6% = 52.2% → composite ceiling 47.8%.
 6. Confirm the eval-peer dependency is visible in §2.2 and not
    buried as a footnote.
 7. Word-count check against the ≤ 2500 word acceptance criterion.
