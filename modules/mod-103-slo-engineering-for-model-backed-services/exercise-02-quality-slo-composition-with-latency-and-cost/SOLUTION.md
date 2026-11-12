@@ -99,7 +99,7 @@ Notes.
 | Latency | `chat-stream` TPOT | p95 ≤ 80 ms / tok | 5% | 28-day | 72% / 30% / 5% |
 | Latency | `chat-stream` ITL | p99 ≤ 2 s | 1% | 28-day | 14.4% / 6% / 1% |
 | Latency | `chat-stream` E2E | p95 ≤ 10 s | 5% | 28-day | 72% / 30% / 5% |
-| Latency | `chat-stream` goodput | p90 ≥ 12 tok/s | 10% | 28-day | capped 50% / 60% / 10% |
+| Latency | `chat-stream` goodput | p10 ≥ 12 tok/s | 10% | 28-day | capped 50% / 60% / 10% |
 | Latency | `code-assist` TTFT | p95 ≤ 700 ms | 5% | 28-day | 72% / 30% / 5% |
 | Latency | `code-assist` E2E (schema-valid) | p95 ≤ 2 s | 5% | 28-day | 72% / 30% / 5% |
 | Latency | `batch-summarize` E2E (per-ticket) | p99 ≤ 180 s | 1% | 28-day | 14.4% / 6% / 1% |
@@ -118,7 +118,7 @@ Notes.
 | Cost (preview from ex. 04) | Cost per 1M output tokens | TBD in ex. 04 | one-sided ceiling | 28-day | ticket-only |
 | Cost (preview from ex. 04) | Cost per completed request | TBD in ex. 04 | one-sided ceiling | 28-day | ticket-only |
 | Cost (preview from ex. 04) | Cost per successful session | TBD in ex. 04 | one-sided ceiling | 28-day | ticket-only |
-| **Composite** | **Sum of two-sided shortfalls** | **≈ 41.1%** (ceiling for "all SLIs green simultaneously") | — | — | — |
+| **Composite** | **Sum of two-sided shortfalls** | **≈ 41.1%** (conservative floor for "all SLIs green simultaneously"; §2.5 derives the number) | — | — | — |
 
 (Cost SLIs are one-sided ceilings and do *not* participate in the
 sum-of-shortfalls; chapter 02 section 3 convention.)
@@ -183,16 +183,19 @@ Quality shortfalls: 3 + 0.1 + 1 + 0.5 + 1 + 2 = **7.6%**.
 Availability shortfalls (preview from exercise 03): 0.1 + 1 + 0.5 =
 **1.6%** (streaming-stall aliases latency ITL, not double-counted).
 
-**Composite ceiling = 1 − min(1, sum) = 1 − 0.522 = 47.8%.** That is
-the ceiling on "all SLIs simultaneously green over a 28-day window"
-under worst-case-correlated error distribution, computed
-conservatively (union bound).
+**Composite floor = 1 − min(1, sum) = 1 − 0.522 = 47.8%.** The union
+bound gives `P(all pass) ≥ 1 − Σ P(failure)`, so 47.8% is a
+conservative **lower bound** on "all SLIs simultaneously green over
+a 28-day window." Overlap between failure events pushes the actual
+joint success rate higher — the bound saturates only when failures
+are maximally disjoint. Treat 47.8% as a floor the stack is
+guaranteed to clear, not a ceiling it cannot exceed.
 
 If the sponsor hears 47.8% and finds it low, three targets of
 tightening:
 
 - **`chat-stream` goodput** currently costs 10 points by itself.
-  Tightening to p90 ≥ 15 tok/s would push some traffic to a
+  Tightening to p10 ≥ 15 tok/s would push some traffic to a
   smaller model; cost: a measurable quality trade-off on long-form
   replies. Defended in exercise 04 against the unit-economics
   model.
@@ -209,10 +212,10 @@ tightening:
 User-experience contract from exercise 01 § 2.1 stated chat-stream
 expects first token within 1 s and complete within 10 s on 95% of
 turns. The composite stack *honors* that contract on the two
-specific SLIs; the composite ceiling of 47.8% describes "all SLIs
+specific SLIs; the composite floor of 47.8% describes "all SLIs
 simultaneously green," which is a stricter statement than the
 contract. The sponsor's user-experience commitment and the engineer-
-facing composite ceiling are different-shape numbers; the review
+facing composite floor are different-shape numbers; the review
 must say so explicitly.
 
 ---
@@ -229,7 +232,7 @@ must say so explicitly.
 4. Confirm two reconciliation scenarios in §2.4 show ordering
    without resolving in full.
 5. Confirm the §2.5 arithmetic adds up: latency 43% + quality 7.6% +
-   availability 1.6% = 52.2% → composite ceiling 47.8%.
+   availability 1.6% = 52.2% → composite floor 47.8%.
 6. Confirm the eval-peer dependency is visible in §2.2 and not
    buried as a footnote.
 7. Word-count check against the ≤ 2500 word acceptance criterion.
@@ -274,9 +277,11 @@ must say so explicitly.
 - **Resolving the reconciliation scenarios.** Exercise 02 only
   needs the *ordering*. The policy (exercise 05) owns the
   resolution.
-- **Confusing the composite ceiling with a user-experience
-  guarantee.** The ceiling is a mathematical upper bound on "all
-  simultaneously green"; it is not the SLA.
+- **Confusing the composite floor with a user-experience
+  guarantee.** The floor is a conservative union-bound **lower**
+  bound on "all simultaneously green" (actual joint success is at
+  least this good, typically higher with overlap); it is neither a
+  ceiling nor the SLA.
 
 ---
 

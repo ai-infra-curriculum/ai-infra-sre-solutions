@@ -114,7 +114,7 @@ a *distinct* combination.
 |---|---|---|---|---|---|---|
 | A — 5xx storm (30% 5xx for 15 min) | **Burns fast** (0.1% budget; 30% error rate is ~300× multiplier) | Depressed slightly (streams that failed before TTFT excluded) | Does not burn (no fallback tagged) | Does not burn | Protocol 2xx | `runbooks/protocol-availability-burn.md` → `mod-102` chapter 03 escalation ladder |
 | B — Mid-stream server crash (preemption, 400 of 1000 tokens) | Clean (response had 2xx headers) | **Burns** (streams opened but did not reach `server_done`) | Does not burn (no fallback) | May burn depending on pre-crash cadence | Partial-success | `runbooks/partial-success-burn.md` |
-| C — Primary provider 5xx, LiteLLM fallback (20% for 10 min) | Clean (gateway absorbed the failures) | Clean (streams completed on secondary) | **Burns** aggregate signal (20% of traffic is now `fallback.path=provider-secondary`); per-path sub-SLI may stay green | Clean | Graceful-degradation (aggregate signal rate, not sub-SLI target) | `runbooks/fallback-rate-burn.md` |
+| C — Primary provider 5xx, LiteLLM fallback engaged for 20% of traffic for 10 min; secondary runs hot under the overflow and ~4% of routed streams miss the `provider-secondary` per-path gate | Clean (gateway absorbed the failures) | Clean (streams completed on secondary) | **Burns** `provider-secondary` per-path sub-SLI (~96% pass against the ≥ 99% target); the aggregate SLI tracks the sub-SLI value because only one fallback is engaged. Separately, fallback **frequency** (20% of total traffic on a non-primary path) is a *routing-rate* signal, surfaced on the same Grafana panel but not inside this SLI's numerator/denominator | Clean | Graceful-degradation (per-path sub-SLI); routing-rate signal co-fires | `runbooks/fallback-rate-burn.md` |
 | D — Scheduler-induced stall (4 s inter-token gap) | Clean | Clean (streams did complete) | Clean | **Burns** (ITL p99 > 2 s) | Streaming-stall | `runbooks/stall-burn.md` → capacity escalation |
 | E — Retrieval index outage (`retrieval-unavailable` fallback engaged for 20 min) | Clean | Clean | **Burns** aggregate signal AND the `retrieval-unavailable` sub-SLI (hallucination SLI also burns — correlated-burn) | Clean | Graceful-degradation (sub-SLI) correlated with hallucination | `runbooks/retrieval-outage.md` + eval-peer notification |
 
@@ -122,7 +122,11 @@ Each row burns a distinct SLI combination:
 
 - A: protocol only.
 - B: partial-success only.
-- C: graceful-degradation aggregate only.
+- C: graceful-degradation `provider-secondary` sub-SLI only
+  (co-fires with the routing-rate signal — routing frequency and
+  routing success are intentionally separate indicators so a healthy
+  fallback that merely absorbs a lot of traffic does not burn the
+  SLO).
 - D: streaming-stall only (correlated with ITL latency).
 - E: graceful-degradation **sub-SLI** correlated with a *quality*
   SLI (hallucination) — the only case that produces a cross-

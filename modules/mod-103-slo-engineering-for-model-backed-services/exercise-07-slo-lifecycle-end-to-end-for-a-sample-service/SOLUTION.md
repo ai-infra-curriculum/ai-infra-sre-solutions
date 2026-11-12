@@ -136,9 +136,11 @@ groups:
       # Latency: TTFT cache-miss p95 over 28 days.
       - record: ttft_cache_miss:slo_error_rate:ratio_rate28d
         expr: |
-          sum(rate(gen_ai_server_time_to_first_token_bucket{slo_surface="chat-stream", slo_cache_hit="false", le="1.2"}[28d]))
-          /
-          sum(rate(gen_ai_server_time_to_first_token_count{slo_surface="chat-stream", slo_cache_hit="false"}[28d]))
+          1 - (
+            sum(rate(gen_ai_server_time_to_first_token_bucket{slo_surface="chat-stream", slo_cache_hit="false", le="1.2"}[28d]))
+            /
+            sum(rate(gen_ai_server_time_to_first_token_count{slo_surface="chat-stream", slo_cache_hit="false"}[28d]))
+          )
 
       # Multiple short windows for the two-window burn-rate guard.
       - record: ttft_cache_miss:slo_error_rate:ratio_rate1h

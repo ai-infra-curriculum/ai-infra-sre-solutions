@@ -56,7 +56,7 @@ SLIs are live.
 
 | Surface | TTFT | TPOT | ITL | E2E | Goodput |
 |---|---|---|---|---|---|
-| `chat-stream` | p95 ≤ 1.2 s on cache-miss; p95 ≤ 400 ms on cache-hit | p95 ≤ 80 ms / token | p99 ≤ 2000 ms inter-token gap | p95 ≤ 10 s on turns ≤ 800 output tokens | p90 ≥ 12 tokens/sec sustained |
+| `chat-stream` | p95 ≤ 1.2 s on cache-miss; p95 ≤ 400 ms on cache-hit | p95 ≤ 80 ms / token | p99 ≤ 2000 ms inter-token gap | p95 ≤ 10 s on turns ≤ 800 output tokens | p10 ≥ 12 tokens/sec sustained (90% of streams meet the floor) |
 | `code-assist` | p95 ≤ 700 ms | N/A — response is a single structured payload, not a token stream after decode; the latency contract is E2E | N/A — same reason | p95 ≤ 2.0 s (schema-valid responses only) | N/A — ungrouped single-shot completion |
 | `batch-summarize` | N/A — non-streaming async API | N/A — non-streaming | N/A — non-streaming | p99 ≤ 180 s per ticket; p99 ≤ 06:00 UTC for job completion | N/A — job-level throughput is measured separately in capacity planning (mod-106) |
 
@@ -171,7 +171,7 @@ absolute burn fraction is `multiplier × (1 − SLO)`.
 | `chat-stream` TPOT | p95 ≤ 80 ms / tok | > 72% over `(1h, 5m)` | > 30% over `(6h, 30m)` | > 5% over `(3d, 6h)` |
 | `chat-stream` ITL | p99 ≤ 2 s | > 14.4% over `(1h, 5m)` — at 99% SLO this is `14.4 × 1% = 14.4%` | > 6% over `(6h, 30m)` | > 1% over `(3d, 6h)` |
 | `chat-stream` E2E | p95 ≤ 10 s | > 72% over `(1h, 5m)` | > 30% over `(6h, 30m)` | > 5% over `(3d, 6h)` |
-| `chat-stream` goodput | p90 ≥ 12 tok/s | > 144% over `(1h, 5m)` — at 90% SLO this is `14.4 × 10% = 144%` — i.e. always triggers; cap at "≥ 50% of events violating"; medium = 60%, slow = 10% | 60% over `(6h, 30m)` | 10% over `(3d, 6h)` |
+| `chat-stream` goodput | p10 ≥ 12 tok/s | > 144% over `(1h, 5m)` — at 90% SLO this is `14.4 × 10% = 144%` — i.e. always triggers; cap at "≥ 50% of events violating"; medium = 60%, slow = 10% | 60% over `(6h, 30m)` | 10% over `(3d, 6h)` |
 | `code-assist` TTFT | p95 ≤ 700 ms | > 72% over `(1h, 5m)` | > 30% over `(6h, 30m)` | > 5% over `(3d, 6h)` |
 | `code-assist` E2E | p95 ≤ 2 s | > 72% over `(1h, 5m)` | > 30% over `(6h, 30m)` | > 5% over `(3d, 6h)` |
 | `batch-summarize` E2E (per-ticket) | p99 ≤ 180 s | > 14.4% over `(1h, 5m)` — `14.4 × 1%` | > 6% over `(6h, 30m)` | > 1% over `(3d, 6h)` |
