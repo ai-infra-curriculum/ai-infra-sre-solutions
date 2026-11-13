@@ -4,6 +4,7 @@
 
 | Date | Work ID | Scope | Title |
 |---|---|---|---|
+| 2026-11-12 | `fill-mod-107-vendor-and-model-provider-risk-solutions` | `mod-107-vendor-and-model-provider-risk` | Fill mod-107-vendor-and-model-provider-risk module exercise solutions |
 | 2026-11-12 | `fill-mod-106-capacity-planning-for-ai-workloads-solutions` | `mod-106-capacity-planning-for-ai-workloads` | Fill mod-106-capacity-planning-for-ai-workloads module exercise solutions |
 | 2026-11-12 | `fill-mod-105-non-deterministic-failure-diagnosis-solutions` | `mod-105-non-deterministic-failure-diagnosis` | Fill mod-105-non-deterministic-failure-diagnosis module exercise solutions |
 | 2026-11-12 | `fill-mod-104-observability-for-llm-and-gpu-workloads-solutions` | `mod-104-observability-for-llm-and-gpu-workloads` | Fill mod-104-observability-for-llm-and-gpu-workloads module exercise solutions |
