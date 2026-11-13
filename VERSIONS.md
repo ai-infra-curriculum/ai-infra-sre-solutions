@@ -14,3 +14,4 @@
 | 2026-11-12 | `fill-mod-101-ai-sre-position-on-the-ladder-solutions` | `mod-101-ai-sre-position-on-the-ladder` | Fill mod-101-ai-sre-position-on-the-ladder module exercise solutions |
 | 2026-11-13 | `fill-mod-111-release-engineering-and-progressive-delivery-solutions` | `mod-111-release-engineering-and-progressive-delivery` | Fill mod-111-release-engineering-and-progressive-delivery module exercise solutions |
 | 2026-11-13 | `fill-mod-110-security-safety-and-compliance-reliability-crossover-solutions` | `mod-110-security-safety-and-compliance-reliability-crossover` | Fill mod-110-security-safety-and-compliance-reliability-crossover module exercise solutions |
+| 2026-11-13 | `fill-mod-113-dr-bcp-and-multi-region-ai-solutions` | `mod-113-dr-bcp-and-multi-region-ai` | Fill mod-113-dr-bcp-and-multi-region-ai module exercise solutions |
