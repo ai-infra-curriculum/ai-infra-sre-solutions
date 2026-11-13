@@ -203,18 +203,12 @@ Score out of 10. Pass = 7+.
 
 | # | Item | Points |
 |---|---|---|
-| 1 | Pool schema includes the four-tuple identity, both caps, burst and
-      fail-mode policies | 2 |
-| 2 | Fair-share allocation sums to ≤100% on both RPM and TPM, with
-      interactive preemption rule | 2 |
-| 3 | Client-side token-bucket discipline per `(pool, class)`, with
-      honouring of `retry-after` and TTFT-bounded retries | 2 |
-| 4 | Four-state admission-control playbook, each state with an alert
-      and a runbook | 1 |
-| 5 | Tier upgrade trigger is a numeric threshold ahead of exhaustion,
-      with lead time in business days | 1 |
-| 6 | Fallback pool is a genuinely separate failure domain (different
-      vendor/account/region) and its parity is stated | 1 |
+| 1 | Pool schema includes the four-tuple identity, both caps, burst and fail-mode policies | 2 |
+| 2 | Fair-share allocation sums to ≤100% on both RPM and TPM, with interactive preemption rule | 2 |
+| 3 | Client-side token-bucket discipline per `(pool, class)`, with honouring of `retry-after` and TTFT-bounded retries | 2 |
+| 4 | Four-state admission-control playbook, each state with an alert and a runbook | 1 |
+| 5 | Tier upgrade trigger is a numeric threshold ahead of exhaustion, with lead time in business days | 1 |
+| 6 | Fallback pool is a genuinely separate failure domain (different vendor/account/region) and its parity is stated | 1 |
 | 7 | Caps carry a date stamp and cite the provider doc | 1 |
 
 Deductions:

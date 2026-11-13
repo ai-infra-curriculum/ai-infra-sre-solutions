@@ -185,8 +185,7 @@ Score out of 10. Pass = 7+.
 
 | # | Item | Points |
 |---|---|---|
-| 1 | Column schema covers class, `λ`, `L_in`, `L_out`, priority, SLO,
-      `U_c`, `Λ_pf`, `Λ_dec`, `N_pf_c`, `N_dec_c`, headroom, regime | 2 |
+| 1 | Column schema covers class, `λ`, `L_in`, `L_out`, priority, SLO, `U_c`, `Λ_pf`, `Λ_dec`, `N_pf_c`, `N_dec_c`, headroom, regime | 2 |
 | 2 | Per-class numbers compute correctly end-to-end on the fixture | 2 |
 | 3 | Shared-pool rollup uses `U_shared = min(U_c)` for mixed priorities | 1 |
 | 4 | Segregated-pool counterfactual present or explicitly rejected | 1 |

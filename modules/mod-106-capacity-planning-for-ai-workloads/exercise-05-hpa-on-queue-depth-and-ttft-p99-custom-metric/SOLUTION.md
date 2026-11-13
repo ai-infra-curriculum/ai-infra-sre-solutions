@@ -257,18 +257,14 @@ Score out of 10. Pass = 7+.
 
 | # | Item | Points |
 |---|---|---|
-| 1 | `autoscaling/v2` HPA with both `queue_depth` (Pods) and
-      `ttft_p99_ms` (External) | 2 |
+| 1 | `autoscaling/v2` HPA with both `queue_depth` (Pods) and `ttft_p99_ms` (External) | 2 |
 | 2 | `selectPolicy: Max` on scale-up | 1 |
 | 3 | Scale-up and scale-down asymmetry in stabilisation and policy | 2 |
-| 4 | Prometheus-adapter / external-metrics config that smooths the
-      source series | 1 |
+| 4 | Prometheus-adapter / external-metrics config that smooths the source series | 1 |
 | 5 | Readiness gate covers engine warm-up | 1 |
-| 6 | Pre-warm / cluster-autoscaler interaction addressed (sentinels or
-      scheduled baselines) | 1 |
+| 6 | Pre-warm / cluster-autoscaler interaction addressed (sentinels or scheduled baselines) | 1 |
 | 7 | Target values tied to measured base-model numbers and SLO budgets | 1 |
-| 8 | `minReplicas ≥ 1` with justification; `maxReplicas` bounded by
-      provider quota or fleet peak | 1 |
+| 8 | `minReplicas ≥ 1` with justification; `maxReplicas` bounded by provider quota or fleet peak | 1 |
 
 Deductions:
 

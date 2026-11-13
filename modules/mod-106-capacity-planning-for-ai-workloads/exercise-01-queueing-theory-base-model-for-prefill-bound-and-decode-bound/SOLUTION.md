@@ -215,8 +215,7 @@ Score out of 10. Pass = 7+.
 | 4 | Worked numeric example with intermediate values shown | 1 |
 | 5 | Regime named (prefill-bound vs decode-bound) with the right levers | 1 |
 | 6 | Queue-wait / Little's Law sanity check on TTFT | 1 |
-| 7 | Honest statement that this is a base model, not a replacement for
-      load tests | 1 |
+| 7 | Honest statement that this is a base model, not a replacement for load tests | 1 |
 
 Deductions (any one knocks a submission below pass):
 

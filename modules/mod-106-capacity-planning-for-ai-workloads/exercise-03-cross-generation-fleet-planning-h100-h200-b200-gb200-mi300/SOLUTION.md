@@ -189,18 +189,12 @@ Score out of 10. Pass = 7+.
 
 | # | Item | Points |
 |---|---|---|
-| 1 | Normalisation table with the required columns, numbers anchored
-      relative to H100 | 2 |
-| 2 | `μ_pf_rel`, `μ_dec_rel`, `max_B` cite a measurement, not a spec
-      sheet | 1 |
-| 3 | Routing policy maps each workload class to the stage it is
-      constrained by, with ≥2 SKUs per class | 2 |
-| 4 | `model_support` column is populated and honoured in the routing
-      policy | 1 |
-| 5 | Refresh plan uses shadow → gradient → overlap → retirement with
-      rollback capacity reserved | 2 |
-| 6 | Second-source / vendor-diversity floor stated as a percentage of
-      total capacity | 1 |
+| 1 | Normalisation table with the required columns, numbers anchored relative to H100 | 2 |
+| 2 | `μ_pf_rel`, `μ_dec_rel`, `max_B` cite a measurement, not a spec sheet | 1 |
+| 3 | Routing policy maps each workload class to the stage it is constrained by, with ≥2 SKUs per class | 2 |
+| 4 | `model_support` column is populated and honoured in the routing policy | 1 |
+| 5 | Refresh plan uses shadow → gradient → overlap → retirement with rollback capacity reserved | 2 |
+| 6 | Second-source / vendor-diversity floor stated as a percentage of total capacity | 1 |
 | 7 | Facilities constraints (power, cooling, rack space) cross-checked | 1 |
 
 Deductions:
