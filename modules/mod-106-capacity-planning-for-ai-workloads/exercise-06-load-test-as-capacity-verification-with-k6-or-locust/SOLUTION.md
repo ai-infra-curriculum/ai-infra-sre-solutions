@@ -30,11 +30,13 @@ re-runs after each capacity change.
 
 ### 2.1 Design principles
 
-- **Open-model arrivals.** Use a Poisson arrival generator (k6's
-  `constant-arrival-rate`, Locust's `constant_pacing`) not a closed-loop
-  "N virtual users looping". LLM users do not wait for the previous
-  response to send the next request; closed-loop hides queueing effects
-  and under-reports TTFT.
+- **Open-model arrivals.** Use a wall-clock arrival generator that is
+  independent of per-request latency: k6's `constant-arrival-rate` /
+  `ramping-arrival-rate`, or Locust's `ArrivalRateUser` from
+  `locust-plugins`. Avoid closed-loop "N virtual users looping" and
+  avoid Locust's `constant_throughput` / `constant_pacing` wait-times
+  for streaming workloads — both back-pressure the arrival rate on
+  response time, which hides queueing effects and under-reports TTFT.
 - **Traffic class decomposition.** Emit at least the Exercise-02
   classes — chat stream, RAG, batch — each at their forecast arrival
   rate. Tag every request with its class so the metrics pipeline can
@@ -60,10 +62,15 @@ re-runs after each capacity change.
 // capacity-verification.js
 // Run: k6 run --env BASE_URL=https://inference.example.com \
 //              --env TOKEN=... capacity-verification.js
+//
+// Requires a custom k6 build that includes the xk6-sse extension so SSE
+// events are delivered to the handler incrementally (rather than after
+// the full body arrives, as with the stock `k6/http` module):
+//
+//   xk6 build --with github.com/phymbert/xk6-sse
 
-import http from 'k6/http';
+import sse from 'k6/x/sse';
 import { Trend, Rate, Counter } from 'k6/metrics';
-import { check } from 'k6';
 import { SharedArray } from 'k6/data';
 import exec from 'k6/execution';
 
@@ -75,6 +82,7 @@ const tpot_chat     = new Trend('tpot_ms_chat',     true);
 const tpot_rag      = new Trend('tpot_ms_rag',      true);
 const tpot_batch    = new Trend('tpot_ms_batch',    true);
 const err           = new Rate('errors');
+const transportErr  = new Counter('transport_failures');
 const dropped429    = new Counter('rate_limited_429');
 
 // Prompt samples drawn from the measured production distribution
@@ -83,15 +91,35 @@ const prompts = new SharedArray('prompts', function () {
   return JSON.parse(open('./prompts.json'));   // [{class, prompt, max_tokens}]
 });
 
+// Index prompts by workload class once, at init time. Using `.find()` in
+// the hot path would always return the first matching sample and silently
+// collapse the length distribution to a single point — defeating the
+// production-faithful L_in / L_out requirement. We randomise across all
+// samples within the chosen class instead.
+const PROMPTS_BY_CLASS = (function () {
+  const b = { chat: [], rag: [], batch: [] };
+  for (const p of prompts) {
+    if (b[p.class]) b[p.class].push(p);
+  }
+  if (!b.chat.length || !b.rag.length || !b.batch.length) {
+    throw new Error('prompts.json must contain samples for chat, rag, and batch');
+  }
+  return b;
+})();
+
 export const options = {
   discardResponseBodies: false,
   thresholds: {
-    'ttft_ms_chat':   ['p(95)<800',  'p(99)<1500'],
-    'ttft_ms_rag':    ['p(95)<1500', 'p(99)<2500'],
-    'ttft_ms_batch':  ['p(95)<60000'],
-    'tpot_ms_chat':   ['p(95)<50'],
-    'tpot_ms_rag':    ['p(95)<60'],
-    'errors':         ['rate<0.005'],
+    'ttft_ms_chat':      ['p(95)<800',  'p(99)<1500'],
+    'ttft_ms_rag':       ['p(95)<1500', 'p(99)<2500'],
+    'ttft_ms_batch':     ['p(95)<60000'],
+    'tpot_ms_chat':      ['p(95)<50'],
+    'tpot_ms_rag':       ['p(95)<60'],
+    // `errors` includes transport failures (status 0) as well as 4xx/5xx,
+    // so an overloaded service that drops TCP/TLS or times out still
+    // trips the gate. `transport_failures` is a separate hard ceiling.
+    'errors':            ['rate<0.005'],
+    'transport_failures': ['count<10'],
   },
   scenarios: {
     baseline: {
@@ -136,14 +164,16 @@ export const options = {
   },
 };
 
-function pickPrompt(class_) {
-  // Sample respecting the forecast's class mix (e.g. 60% chat, 30% rag,
-  // 10% batch). This is driven by exec.scenario.iterationInTest to keep
-  // the ratio stable across VUs.
+function pickPrompt() {
+  // Class mix follows Exercise 02's forecast (e.g. 60% chat, 30% rag,
+  // 10% batch). The iteration counter keeps the ratio stable across VUs;
+  // the per-class draw is uniform over all samples in that class so the
+  // production L_in / L_out distribution is exercised, not just its
+  // first entry.
   const roll = (exec.scenario.iterationInTest * 2654435761) % 10;
-  if (roll < 6)  return prompts.find(p => p.class === 'chat');
-  if (roll < 9)  return prompts.find(p => p.class === 'rag');
-  return prompts.find(p => p.class === 'batch');
+  const cls = roll < 6 ? 'chat' : roll < 9 ? 'rag' : 'batch';
+  const bucket = PROMPTS_BY_CLASS[cls];
+  return bucket[Math.floor(Math.random() * bucket.length)];
 }
 
 export function mixed() {
@@ -159,8 +189,15 @@ export function mixed() {
   let firstByteTs = null;
   let lastTokenTs = null;
   let tokenCount = 0;
+  let clientError = false;
 
-  const res = http.post(`${__ENV.BASE_URL}/v1/chat/completions`, body, {
+  // sse.open streams events to the handler as they arrive — this is what
+  // makes TTFT a real streaming measurement rather than a measurement of
+  // total response time. The underlying HTTP response status is returned
+  // on `response.status`.
+  const response = sse.open(`${__ENV.BASE_URL}/v1/chat/completions`, {
+    method: 'POST',
+    body: body,
     headers: {
       'Authorization': `Bearer ${__ENV.TOKEN}`,
       'Content-Type': 'application/json',
@@ -168,45 +205,60 @@ export function mixed() {
       'X-Workload-Class': p.class,
     },
     timeout: '120s',
-    responseType: 'text',   // iterate through the SSE payload
     tags: { workload_class: p.class },
+  }, function (client) {
+    client.on('event', function (event) {
+      if (!event.data || event.data === '[DONE]') {
+        if (event.data === '[DONE]') client.close();
+        return;
+      }
+      const now = Date.now();
+      if (firstByteTs === null) firstByteTs = now;
+      lastTokenTs = now;
+      tokenCount += 1;
+    });
+    client.on('error', function () {
+      clientError = true;
+      client.close();
+    });
   });
 
-  if (res.status === 429) {
+  // Status 0 means the connection never completed (timeout, connection
+  // refused, DNS, TLS, mid-stream reset). Count it as a transport failure
+  // and an error — otherwise overloaded services look healthy.
+  if (!response || response.status === 0 || clientError) {
+    transportErr.add(1);
+    err.add(1);
+    return;
+  }
+  if (response.status === 429) {
     dropped429.add(1);
     err.add(1);
     return;
   }
-  if (res.status >= 500) {
+  if (response.status >= 400) {
+    err.add(1);
+    return;
+  }
+  err.add(false);
+
+  if (firstByteTs === null) {
+    // 200 with no content events ever delivered: treat as a transport-class
+    // failure for the purpose of the gate (no latency sample means a
+    // silently broken stream, not a success).
+    transportErr.add(1);
     err.add(1);
     return;
   }
 
-  // Walk the SSE body to compute TTFT and TPOT at the client.
-  const lines = (res.body || '').split('\n');
-  for (const line of lines) {
-    if (!line.startsWith('data: ')) continue;
-    const payload = line.slice(6).trim();
-    if (payload === '[DONE]') break;
-    const now = Date.now();
-    if (firstByteTs === null) firstByteTs = now;
-    lastTokenTs = now;
-    tokenCount += 1;
-  }
-
-  const ttft = firstByteTs != null ? (firstByteTs - start) : NaN;
-  const tpot = (tokenCount > 1 && firstByteTs != null)
+  const ttft = firstByteTs - start;
+  const tpot = (tokenCount > 1)
     ? (lastTokenTs - firstByteTs) / (tokenCount - 1)
     : NaN;
 
-  check(res, { 'status 200': r => r.status === 200 });
-  err.add(res.status >= 400);
-
-  if (!Number.isNaN(ttft)) {
-    (p.class === 'chat'  ? ttft_chat  :
-     p.class === 'rag'   ? ttft_rag   :
-                           ttft_batch).add(ttft);
-  }
+  (p.class === 'chat'  ? ttft_chat  :
+   p.class === 'rag'   ? ttft_rag   :
+                         ttft_batch).add(ttft);
   if (!Number.isNaN(tpot) && p.class !== 'batch') {
     (p.class === 'chat' ? tpot_chat : tpot_rag).add(tpot);
   }
@@ -217,13 +269,27 @@ Correctness notes on this script:
 
 - `constant-arrival-rate` is an *open* model; `preAllocatedVUs` and
   `maxVUs` are safety ceilings, not the arrival driver.
-- Streaming is parsed line-by-line so TTFT is the time to the first
-  `data:` token payload, not the time to receive response headers.
+- **Streaming is real streaming.** `sse.open` (from `xk6-sse`) dispatches
+  each SSE event to the handler as the server flushes it, so `firstByteTs`
+  is the wall-clock time the first *content* token arrives. The stock
+  `k6/http` module returns the full body in one blocking call; walking
+  that body post-hoc would make TTFT equal end-to-end response time and
+  make TPOT equal local string-processing time — both wrong.
 - TPOT is measured over inter-token gaps, not divided out of total
   duration — this matters because the first token carries prefill time
   in it and would distort an "all tokens averaged" number.
 - Each class has its own trend metric and its own threshold in
   `options.thresholds`. The run fails if any class misses its SLO.
+- **Transport failures count.** `response.status === 0`, connection
+  resets observed by the SSE client, and 200 responses that deliver zero
+  content events all increment `transport_failures` and `errors`. An
+  overloaded service that times out or drops connections cannot sneak
+  past the error-rate gate by producing no status code and no latency
+  sample.
+- **Prompts are sampled uniformly within each class.** `pickPrompt` picks
+  the class from the forecast mix, then draws from `PROMPTS_BY_CLASS[cls]`
+  — not `prompts.find()`, which would always return the first matching
+  entry and collapse the production length distribution to a single point.
 
 ### 2.3 Locust alternative
 
@@ -233,7 +299,11 @@ behaviour per-class), the equivalent user class:
 ```python
 # locustfile.py
 import json, time, random
-from locust import FastHttpUser, task, events, between, constant_throughput
+from collections import defaultdict
+from locust import task, events
+# ArrivalRateUser provides *open-model* arrivals (inter-arrival time
+# independent of task duration). Install via `pip install locust-plugins`.
+from locust_plugins.users.arrival_rate_user import ArrivalRateUser
 
 CLASSES = [
     ('chat',  0.6, {'ttft_p95_ms': 800,   'tpot_p95_ms': 50}),
@@ -244,64 +314,101 @@ CLASSES = [
 with open('prompts.json') as f:
     PROMPTS = json.load(f)   # list of {class, prompt, max_tokens}
 
-class InferenceUser(FastHttpUser):
-    # Open-model-ish shaping: each user emits requests at a fixed rate.
-    # Combine with a users-count sweep to hit target arrival rates.
-    wait_time = constant_throughput(1)   # 1 req/s/user
+# Index prompts by class once. Using next(p for p in PROMPTS if ...) in
+# the hot path returns the first matching entry every call, which
+# collapses the production L_in / L_out distribution to a single sample
+# and overstates capacity. Sample uniformly within the class instead.
+PROMPTS_BY_CLASS = defaultdict(list)
+for _p in PROMPTS:
+    PROMPTS_BY_CLASS[_p['class']].append(_p)
+for _cls, _w, _ in CLASSES:
+    assert PROMPTS_BY_CLASS[_cls], f'prompts.json has no samples for {_cls!r}'
+
+
+class InferenceUser(ArrivalRateUser):
+    # Target *global* arrival rate (requests/s across all users). Set via
+    # CLI: `locust --target-arrival-rate 70 ...`. ArrivalRateUser schedules
+    # tasks on a wall-clock cadence that does NOT wait for the previous
+    # task to finish — so a streaming response that takes 5 s does not
+    # back-pressure the offered load, which is the point of a capacity
+    # test. The stock Locust `constant_throughput(N)` / `constant_pacing`
+    # wait-times measure only *between* tasks per user, so if generate()
+    # exceeds 1/N seconds a user drops below the target rate and the
+    # queueing this exercise is meant to verify disappears.
+    target_arrival_rate = 70   # req/s, matches Exercise 02 forecast peak
 
     @task
     def generate(self):
         cls = _sample_class()
-        prompt = next(p for p in PROMPTS if p['class'] == cls)
+        prompt = random.choice(PROMPTS_BY_CLASS[cls])
         start = time.perf_counter()
         first_byte_ts = None
         last_ts = None
         tokens = 0
-        with self.client.post(
-            '/v1/chat/completions',
-            data=json.dumps({
-                'model': 'inference-serve',
-                'stream': True,
-                'max_tokens': prompt['max_tokens'],
-                'messages': [{'role': 'user', 'content': prompt['prompt']}],
-            }),
-            headers={
-                'Accept': 'text/event-stream',
-                'Content-Type': 'application/json',
-                'X-Workload-Class': cls,
-            },
-            stream=True,
-            name=f'/v1/chat/completions[{cls}]',
-            catch_response=True,
-        ) as resp:
-            if resp.status_code == 429:
-                resp.failure('rate_limited')
-                return
-            if resp.status_code >= 500:
-                resp.failure(f'{resp.status_code}')
-                return
-            for line in resp.iter_lines():
-                if not line or not line.startswith(b'data: '):
-                    continue
-                if line.strip() == b'data: [DONE]':
-                    break
-                now = time.perf_counter()
-                if first_byte_ts is None:
-                    first_byte_ts = now
-                last_ts = now
-                tokens += 1
-        ttft_ms = (first_byte_ts - start) * 1000 if first_byte_ts else None
+        transport_failed = False
+        try:
+            with self.client.post(
+                '/v1/chat/completions',
+                data=json.dumps({
+                    'model': 'inference-serve',
+                    'stream': True,
+                    'max_tokens': prompt['max_tokens'],
+                    'messages': [{'role': 'user', 'content': prompt['prompt']}],
+                }),
+                headers={
+                    'Accept': 'text/event-stream',
+                    'Content-Type': 'application/json',
+                    'X-Workload-Class': cls,
+                },
+                stream=True,
+                name=f'/v1/chat/completions[{cls}]',
+                catch_response=True,
+                timeout=120,
+            ) as resp:
+                if resp.status_code == 429:
+                    resp.failure('rate_limited')
+                    _fire_error(cls, 'rate_limited')
+                    return
+                if resp.status_code >= 400:
+                    resp.failure(f'{resp.status_code}')
+                    _fire_error(cls, f'status_{resp.status_code}')
+                    return
+                try:
+                    for line in resp.iter_lines():
+                        if not line or not line.startswith(b'data: '):
+                            continue
+                        if line.strip() == b'data: [DONE]':
+                            break
+                        now = time.perf_counter()
+                        if first_byte_ts is None:
+                            first_byte_ts = now
+                        last_ts = now
+                        tokens += 1
+                except Exception as ex:   # mid-stream reset, read timeout
+                    transport_failed = True
+                    resp.failure(f'stream_error:{type(ex).__name__}')
+        except Exception as ex:          # connect/TLS/DNS failure
+            transport_failed = True
+            _fire_error(cls, f'transport:{type(ex).__name__}')
+            return
+
+        if transport_failed or first_byte_ts is None:
+            # No first-byte sample — treat as a transport-class failure so
+            # an overloaded server that silently stalls does not pass.
+            _fire_error(cls, 'no_first_byte')
+            return
+
+        ttft_ms = (first_byte_ts - start) * 1000
         tpot_ms = ((last_ts - first_byte_ts) / max(tokens - 1, 1)) * 1000 \
-            if tokens > 1 and first_byte_ts else None
-        if ttft_ms is not None:
-            events.request.fire(
-                request_type='POST',
-                name=f'ttft[{cls}]',
-                response_time=ttft_ms,
-                response_length=tokens,
-                exception=None,
-                context={'class': cls},
-            )
+            if tokens > 1 else None
+        events.request.fire(
+            request_type='POST',
+            name=f'ttft[{cls}]',
+            response_time=ttft_ms,
+            response_length=tokens,
+            exception=None,
+            context={'class': cls},
+        )
         if tpot_ms is not None and cls != 'batch':
             events.request.fire(
                 request_type='POST',
@@ -311,6 +418,18 @@ class InferenceUser(FastHttpUser):
                 exception=None,
                 context={'class': cls},
             )
+
+
+def _fire_error(cls, reason):
+    events.request.fire(
+        request_type='POST',
+        name=f'error[{cls}]',
+        response_time=0,
+        response_length=0,
+        exception=Exception(reason),
+        context={'class': cls, 'reason': reason},
+    )
+
 
 def _sample_class():
     r = random.random()
@@ -325,6 +444,28 @@ def _sample_class():
 Pair this with the standard Locust `--check-exceptions` and a thresholds
 check in CI (e.g. `locust-plugins`' `set_fail_on_perf` or a custom
 stage-end hook) so the run fails on SLO breach.
+
+Three correctness notes on the Locust version:
+
+- **Open-model arrivals require `ArrivalRateUser`.** `wait_time =
+  constant_throughput(N)` and `constant_pacing(N)` both schedule
+  *between* tasks on a single user, so if a streamed generation takes
+  longer than `1/N` seconds — common for anything but the shortest
+  chat — the user falls below `N` req/s. As latency grows under load,
+  offered load falls, hiding precisely the queueing this test is meant
+  to verify. `ArrivalRateUser` (from `locust-plugins`) dispatches tasks
+  on wall-clock without waiting for prior tasks to return, which is
+  what k6's `constant-arrival-rate` does natively. If `locust-plugins`
+  is not available, prefer the k6 script above; a closed-loop Locust
+  run will systematically understate required capacity.
+- **Transport failures count.** `except` blocks around both the request
+  and the stream-read fire explicit error events; a stream that opens,
+  returns 200, then stalls without delivering a single content event
+  also counts as `no_first_byte` rather than a silent pass.
+- **Prompts are sampled uniformly within each class.** `PROMPTS_BY_CLASS`
+  is built once at import time; `random.choice(PROMPTS_BY_CLASS[cls])`
+  draws from the full production distribution rather than always
+  returning `next(... first match ...)`.
 
 ### 2.4 Stage design and pass/fail rules
 
@@ -380,7 +521,7 @@ Score out of 10. Pass = 7+.
 
 | # | Item | Points |
 |---|---|---|
-| 1 | Open-model arrival generator (constant-arrival-rate / constant_pacing) | 1 |
+| 1 | Open-model arrival generator (k6 `constant-arrival-rate` / `ramping-arrival-rate`, or Locust `ArrivalRateUser`); closed-loop VU-count, `constant_throughput`, or `constant_pacing` not accepted for streaming workloads | 1 |
 | 2 | Streaming-aware TTFT at first content byte; TPOT over inter-token gaps | 2 |
 | 3 | Per-class metrics and per-class thresholds | 2 |
 | 4 | Three-stage design (baseline / forecast / over-forecast) with gates | 2 |

@@ -75,18 +75,33 @@ Offered decode rate (in tokens/s across the fleet):
 Λ_dec = λ · L_out
 ```
 
-### 2.4 Required replicas — take the max of the two stages
+### 2.4 Required replicas — add the two stages' utilisation
 
 ```
-N_pf  = ceil( Λ_pf  / ( μ_pf  · U_target ) )
-N_dec = ceil( Λ_dec / ( μ_dec · U_target ) )
-N     = max( N_pf, N_dec )
+# Fractional replica-seconds consumed per wall-clock second by each stage:
+ρ_pf   = Λ_pf  / μ_pf     # prefill replicas worth of load
+ρ_dec  = Λ_dec / μ_dec    # decode  replicas worth of load
+
+# Shared-GPU case (the default — one deployment runs both stages on the
+# same replicas, so the two loads share the replica-second budget):
+N        = ceil( ( ρ_pf + ρ_dec ) / U_target )
+
+# Hypothetical "if this stage ran alone" sizings, used to name the regime:
+N_pf     = ceil( ρ_pf  / U_target )
+N_dec    = ceil( ρ_dec / U_target )
+
+# Disaggregated-pool case (separate prefill and decode replicas):
+N_disagg = N_pf + N_dec
 ```
 
-The fleet size is set by **whichever stage saturates first**. If `N_pf > N_dec`,
-the workload is *prefill-bound* and you should scale by prompt length or by
-input-TPS. If `N_dec > N_pf`, the workload is *decode-bound* and you should
-scale by output tokens or concurrent sequences. Reporting a single `N` without
+Taking `max(N_pf, N_dec)` is the common mistake: it treats each stage as if it
+owned the entire replica's service capacity, which is only true when prefill and
+decode run on **separate** pools. When they share replicas — the usual
+deployment — their utilisations add, and the correct size is driven by the sum.
+
+Even with the additive formula, the fleet is still described as **prefill-bound
+vs decode-bound** by comparing `ρ_pf` to `ρ_dec`: whichever is larger names the
+regime and picks the right headroom lever. Reporting a single `N` without
 disclosing which term dominated is the failure mode this exercise is designed
 to catch.
 
@@ -94,17 +109,35 @@ to catch.
 
 A base model also needs a *latency* sanity check so the learner notices when
 the fleet is sized for average throughput but will still miss its TTFT SLO.
-Treat the prefill stage as an M/M/c queue with `c = N_pf` servers and service
-rate `μ_pf` per server. With offered load `ρ = Λ_pf / (c · μ_pf)`, the
-Erlang-C formula gives the probability of queueing (`P_wait`), and the mean
-wait before service is approximately `P_wait / (c · μ_pf · (1 − ρ))`.
+Treat the prefill stage as an M/M/c queue **at the request level**: a queued
+customer is one whole prompt, not a token, so the per-replica request service
+rate is
 
-M/M/c is wrong in the details (arrivals are bursty, service times are
-heavy-tailed, decode is batched), but it is good enough to answer the
-question *"how fast does my queue-wait blow up as `ρ` approaches 1?"*. The
+```
+T_req_pf = L_in · T_pf          # seconds per prompt on one replica (prefill)
+μ_req_pf = 1 / T_req_pf          # prompts per second per replica
+```
+
+With arrival rate `λ` (req/s) and `c = N_pf` servers, the offered load is
+`ρ = λ / (c · μ_req_pf) = λ · L_in · T_pf / c`. Erlang-C then gives the
+probability of queueing (`P_wait`), and the mean wait before service is
+approximately `P_wait / (c · μ_req_pf · (1 − ρ))` — **measured in units of the
+request service time**, not of per-token service time.
+
+Substituting token rates (`Λ_pf` and `μ_pf`) directly into Erlang-C instead
+models independently arriving, independently served *tokens*, which is wrong
+even for fixed-length prompts: it understates request waiting time by roughly
+a prompt-length factor. In the worked example, ρ comes out the same either
+way (0.64) because the `L_in` factors cancel in the ratio, but `μ_req_pf`
+sets the time unit — mean wait at ρ = 0.9 is "several times `T_req_pf`",
+i.e. multiple seconds for an 800-token prompt, not multiple milliseconds.
+
+M/M/c is still wrong in the details (arrivals are bursty, service times are
+heavy-tailed, decode is batched), but at the request level it is good enough
+to answer *"how fast does my queue-wait blow up as `ρ` approaches 1?"*. The
 intended takeaway is the knee: at `ρ = 0.9` mean wait is already several
-times service time, which is why the rubric below marks `U_target ≥ 0.85`
-as a defect.
+times request service time, which is why the rubric below marks
+`U_target ≥ 0.85` as a defect.
 
 Reference Little's Law for the composition: the number of in-flight requests
 `L = λ · W` (where `W` is end-to-end time). A learner who derives `W` from
@@ -128,13 +161,24 @@ Then:
 Λ_pf  = 40 · 800 = 32,000  input-tok/s
 Λ_dec = 40 · 200 =  8,000  output-tok/s
 
-N_pf  = ceil( 32,000 / (1000 · 0.65) ) = ceil(49.23)  = 50
-N_dec = ceil(  8,000 / ( 640 · 0.65) ) = ceil(19.23)  = 20
+ρ_pf  = 32,000 / 1,000     = 32.0   replicas worth of prefill
+ρ_dec =  8,000 /   640     = 12.5   replicas worth of decode
 
-N     = max(50, 20)                                   = 50  (prefill-bound)
+# Standalone sizings (regime indicators only):
+N_pf  = ceil( 32.0 / 0.65 ) = 50
+N_dec = ceil( 12.5 / 0.65 ) = 20
+
+# Shared-GPU fleet size:
+N     = ceil( (32.0 + 12.5) / 0.65 ) = ceil(68.46) = 69  (prefill-bound)
 ```
 
-Decision: this fleet is prefill-bound. Headroom actions in priority order:
+The old `max(50, 20) = 50` answer would run the shared fleet at
+`44.5 / 50 = 89%` utilisation — well past the 65% target and into the
+Erlang-C knee. The correct additive sizing lands at `44.5 / 69 ≈ 64%`,
+back inside the design budget.
+
+Decision: this fleet is prefill-bound (`ρ_pf = 32 >> ρ_dec = 12.5`). Headroom
+actions in priority order:
 
 1. Shorten prompts (prompt-template review, context compression, retrieval
    trimming) — biggest lever on `L_in`.
@@ -153,11 +197,17 @@ Flip the example: `L_in = 100`, `L_out = 2,000` tokens/req. Now:
 Λ_pf  = 40 ·   100 =    4,000   input-tok/s
 Λ_dec = 40 · 2,000 =   80,000   output-tok/s
 
-N_pf  = ceil(   4,000 / (1000 · 0.65) ) =   7
-N_dec = ceil(  80,000 / ( 640 · 0.65) ) = 193
+ρ_pf  =  4,000 / 1,000 =   4.0  replicas worth of prefill
+ρ_dec = 80,000 /   640 = 125.0  replicas worth of decode
 
-N     = max(7, 193)                     = 193  (decode-bound)
+N_pf  = ceil(   4.0 / 0.65 ) =   7
+N_dec = ceil( 125.0 / 0.65 ) = 193
+
+N     = ceil( (4.0 + 125.0) / 0.65 ) = ceil(198.46) = 199  (decode-bound)
 ```
+
+Decode dominates (`ρ_dec = 125 >> ρ_pf = 4`); the additive and standalone
+sizings barely differ because prefill is a rounding error here.
 
 Headroom actions here are the mirror image: increase decode batch `B`, move
 to a hardware tier with higher HBM bandwidth, or shed load on output tokens
@@ -211,7 +261,7 @@ Score out of 10. Pass = 7+.
 |---|---|---|
 | 1 | Variables table with units, prefill and decode kept separate | 2 |
 | 2 | Correct per-replica service rates `μ_pf` and `μ_dec = B / T_dec` | 2 |
-| 3 | `N = max(N_pf, N_dec)` with `ceil()` and `U_target` factor | 2 |
+| 3 | `N = ceil((ρ_pf + ρ_dec) / U_target)` on shared replicas (additive, not `max`); `ceil()` and `U_target` factor present | 2 |
 | 4 | Worked numeric example with intermediate values shown | 1 |
 | 5 | Regime named (prefill-bound vs decode-bound) with the right levers | 1 |
 | 6 | Queue-wait / Little's Law sanity check on TTFT | 1 |
@@ -229,6 +279,12 @@ Deductions (any one knocks a submission below pass):
 - **Collapsing the two stages into one `requests/s` number.** Produces a
   plausible-looking but unactionable answer; the learner cannot tell which
   lever to pull when the fleet saturates.
+- **Sizing shared replicas with `max(N_pf, N_dec)`.** On co-located prefill +
+  decode, the two stages share the replica-second budget, so their
+  utilisations add. `max()` is only correct for disaggregated pools; applying
+  it to a shared fleet silently runs the cluster past `U_target`. Use
+  `ceil((ρ_pf + ρ_dec) / U_target)` instead and compare `ρ_pf` vs `ρ_dec`
+  to name the regime.
 - **Using throughput at `U = 1.0`.** Steady-state queueing is unstable near
   full utilisation; the base model must bake in a utilisation target so
   TTFT does not fall off a cliff when traffic bursts.

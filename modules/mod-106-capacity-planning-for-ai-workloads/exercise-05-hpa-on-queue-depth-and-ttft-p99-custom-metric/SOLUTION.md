@@ -20,7 +20,10 @@ growth.
 The reference solution below delivers:
 
 1. A working HPA manifest (`autoscaling/v2`) that scales on both
-   signals with `selectPolicy: Max`.
+   signals (HPA takes the max per-metric recommendation automatically)
+   with `selectPolicy: Min` on the scale-up policies list so the
+   percent and absolute-pods ceilings act as safety caps rather than
+   compounding.
 2. The Prometheus-adapter / external-metrics wiring that exposes
    `queue_depth` and `ttft_p99_ms` to the HPA.
 3. The reasoning for the target values and the stabilisation windows.
@@ -84,7 +87,11 @@ spec:
         - type: Pods
           value: 10
           periodSeconds: 30
-      selectPolicy: Max
+      selectPolicy: Min   # percent wins at low scale (4→8 = +4 < +10 pods);
+                          # pods wins at high scale (60→70 = +10 < +60).
+                          # Scale-out across multiple *metrics* is still "max"
+                          # — the HPA always picks the larger per-metric
+                          # recommendation regardless of selectPolicy.
     scaleDown:
       stabilizationWindowSeconds: 600
       policies:
@@ -106,18 +113,25 @@ Why these specific choices:
 - **External-type metric for `ttft_p99_ms`** because it is a
   service-level aggregate, not a per-pod quantity. The external metric
   provider computes it from Prometheus histograms server-side.
-- **`selectPolicy: Max` for scale-up.** When either signal wants a
-  scale-out, do the larger one. A deep queue and a crossing TTFT p99
-  usually fire together; using `Max` matches the demand envelope.
+- **Cross-metric selection is always `Max`.** When either signal (queue
+  or TTFT p99) wants a scale-out, the HPA picks the larger per-metric
+  recommendation — this is HPA's built-in multi-metric behavior and is
+  not controlled by `selectPolicy`. A deep queue and a crossing TTFT p99
+  usually fire together; the larger of the two drives the result.
 - **Scale-up stabilisation = 30 s, scale-down = 600 s.** Scale-up is
   cheap when wrong (a few extra replicas for a minute); scale-down is
   expensive when wrong (the queue blows back up and TTFT breaches).
   Asymmetry is the SRE pattern.
 - **Scale-up policies capped at +100%/30 s and +10 pods/30 s with
-  `Max`.** The percent policy wins at low fleet size (double from 4 to
-  8 in 30 s). The absolute-pods policy wins at high fleet size (add 10
-  at a time so a traffic spike does not try to double a 60-pod fleet
-  in one tick and overflow node capacity).
+  `selectPolicy: Min`.** `Min` picks the smaller of the two policies'
+  recommendations, which is the safety ceiling pattern. At low fleet
+  size the percent policy wins (4 → 4 + min(+4, +10) = 8, i.e. double
+  from 4 to 8). At high fleet size the absolute-pods policy wins
+  (60 → 60 + min(+60, +10) = 70) so a traffic spike does not try to
+  double a 60-pod fleet in one tick and overflow node capacity. Using
+  `Max` here would do the opposite — allow +10 at low scale (4 → 14)
+  and the full +100% at high scale (60 → 120), exhausting GPU capacity
+  during a burst.
 - **Scale-down policy = 10%/60 s with `Min`.** Drains a factor-of-two
   spike over roughly seven minutes; still faster than a full
   demand-cycle but slow enough that the queue signal can argue back if
@@ -230,9 +244,12 @@ about SLO cost.
 2. **Both signals present.** A single-signal HPA (queue depth only, or
    TTFT only) fails the exercise. Queue catches throughput; TTFT catches
    SLO degradation.
-3. **`selectPolicy: Max` on scale-up.** Otherwise the fleet scales to
-   the smaller of the two recommendations and under-provisions during
-   demand bursts.
+3. **`selectPolicy: Min` on the scale-up policies.** With both a
+   percent and an absolute-pods policy, `Min` makes each policy a
+   ceiling: percent doubles small fleets, absolute caps large fleets.
+   `Max` instead compounds the two and lets a 60-pod fleet attempt a
+   +100% jump, exhausting GPU capacity. Cross-metric selection (queue
+   vs TTFT) is independent and always takes the max.
 4. **Scale-up / scale-down asymmetry.** Scale-down stabilisation ≥ 10×
    scale-up stabilisation, scale-down policy conservative compared to
    scale-up policy.
@@ -258,7 +275,7 @@ Score out of 10. Pass = 7+.
 | # | Item | Points |
 |---|---|---|
 | 1 | `autoscaling/v2` HPA with both `queue_depth` (Pods) and `ttft_p99_ms` (External) | 2 |
-| 2 | `selectPolicy: Max` on scale-up | 1 |
+| 2 | `selectPolicy: Min` on scale-up policies (percent + absolute-pods act as safety ceilings, not compounding) | 1 |
 | 3 | Scale-up and scale-down asymmetry in stabilisation and policy | 2 |
 | 4 | Prometheus-adapter / external-metrics config that smooths the source series | 1 |
 | 5 | Readiness gate covers engine warm-up | 1 |
