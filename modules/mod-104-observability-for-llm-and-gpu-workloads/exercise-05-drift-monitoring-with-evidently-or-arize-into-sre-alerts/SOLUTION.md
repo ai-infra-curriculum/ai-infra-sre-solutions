@@ -209,7 +209,7 @@ Route drift alerts to a model-platform or ML-eng rotation, not the infra SRE rot
 ## 6. References
 
 - Evidently AI documentation: https://docs.evidentlyai.com/
-- Evidently data-drift presets and statistics: https://docs.evidentlyai.com/reference/all-metrics
+- Evidently data-drift presets and statistics: http://web.archive.org/web/20241214155449/https://docs.evidentlyai.com/reference/all-metrics
 - Arize documentation (monitors, drift): https://docs.arize.com/
 - Prometheus Pushgateway (for batch job metrics): https://prometheus.io/docs/instrumenting/pushing/
 - NIST AI Risk Management Framework 1.0: https://www.nist.gov/itl/ai-risk-management-framework
